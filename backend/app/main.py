@@ -62,12 +62,12 @@ def transcribe(filename):
     return result
 
 HOOK_WORDS = {"wait", "what", "why", "how", "crazy", "insane", "never", "secret", "truth", "actually", "bro", "wow", "impossible", "mistake", "problem", "money", "love", "hate", "scared", "wild", "guess"}
-def find_highlights(segments, duration):
+def find_highlights(segments, duration, clip_length=30, limit=20):
     candidates = []
     # Score overlapping transcript windows; these are heuristic suggestions, not a promise of virality.
     for i, seg in enumerate(segments):
         start = seg["start"]
-        end = min(duration, start + 35)
+        end = min(duration, start + clip_length)
         group = [s for s in segments if s["start"] < end and s["end"] > start]
         text = " ".join(s["text"] for s in group).strip()
         words = re.findall(r"[\w']+", text.lower())
@@ -83,7 +83,7 @@ def find_highlights(segments, duration):
     for item in candidates:
         if all(abs(item["start"] - old["start"]) > 18 for old in selected):
             selected.append(item)
-        if len(selected) == 5:
+        if len(selected) == limit:
             break
     return selected
 
@@ -115,11 +115,18 @@ async def upload_video(file: UploadFile = File(...)):
         raise
     return {"filename": name, "original_name": file.filename, "size": size}
 
-def _run_analysis(job_id, filename):
+def _run_analysis(job_id, filename, payload):
     JOBS[job_id]["status"] = "running"
     try:
         transcript = transcribe(filename)
-        JOBS[job_id].update(status="completed", result={**transcript, "highlights": find_highlights(transcript["segments"], transcript["duration"])})
+        clip_length = int(payload.get("clip_length", 30))
+        clip_count = int(payload.get("clip_count", 10))
+        if clip_length not in (30, 60):
+            clip_length = 30
+        if clip_count not in (10, 20, 30, 40):
+            clip_count = 10
+        highlights = find_highlights(transcript["segments"], transcript["duration"], clip_length, clip_count)
+        JOBS[job_id].update(status="completed", result={**transcript, "highlights": highlights})
     except HTTPException as exc:
         JOBS[job_id].update(status="failed", error=str(exc.detail))
     except Exception as exc:
@@ -131,7 +138,7 @@ def analyze_video(payload: dict):
     safe_upload(filename)
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {"status": "queued", "type": "analysis"}
-    JOB_POOL.submit(_run_analysis, job_id, filename)
+    JOB_POOL.submit(_run_analysis, job_id, filename, payload)
     return {"job_id": job_id}
 
 @app.get("/api/jobs/{job_id}")
