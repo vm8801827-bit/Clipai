@@ -2,13 +2,13 @@ services:
   - type: web
     name: clipai
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
       - key: PORT
         value: "10000"
       - key: WHISPER_MODEL
-        value: "small"
+        value: "tiny"
       - key: MAX_UPLOAD_MB
-        value: "500"
+        value: "100"
