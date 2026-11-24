@@ -4,21 +4,102 @@ import {Upload, Scissors, Download, Sparkles, Film, LoaderCircle, CheckCircle2, 
 import './style.css';
 
 function App(){
- const [file,setFile]=useState(null),[sourceUrl,setSourceUrl]=useState(''),[uploaded,setUploaded]=useState(null),[start,setStart]=useState(0),[duration,setDuration]=useState(30),[busy,setBusy]=useState(false),[stage,setStage]=useState(''),[clip,setClip]=useState(null),[error,setError]=useState(''),[analysis,setAnalysis]=useState(null),[captions,setCaptions]=useState(true),[uploadProgress,setUploadProgress]=useState(0),[clipCount,setClipCount]=useState(10);
+ const [file,setFile]=useState(null),[sourceUrl,setSourceUrl]=useState(''),[uploaded,setUploaded]=useState(null);
+ const [duration,setDuration]=useState(30),[busy,setBusy]=useState(false),[stage,setStage]=useState(''),[error,setError]=useState('');
+ const [analysis,setAnalysis]=useState(null),[captions,setCaptions]=useState(true),[uploadProgress,setUploadProgress]=useState(0),[clipCount,setClipCount]=useState(10);
+ const [clips,setClips]=useState([]),[clipProgress,setClipProgress]=useState({done:0,total:0});
  const api=import.meta.env.VITE_API_URL||'';
- async function readResponse(r){const raw=await r.text();let d={};try{d=raw?JSON.parse(raw):{}}catch{throw new Error('Server ne invalid response diya. Service restart/deploy ho raha ho sakta hai; thodi der baad retry karo.')}if(!r.ok)throw new Error(d.detail||d.error||('Request failed (HTTP '+r.status+').'));return d} async function request(path,body){const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return readResponse(r)}
- async function waitForJob(jobId){while(true){await new Promise(resolve=>setTimeout(resolve,2500));const r=await fetch(api+'/api/jobs/'+jobId);const d=await readResponse(r);if(d.status==='completed')return d.result;if(d.status==='failed')throw new Error(d.error||'Processing failed');}}
- async function upload(){if(!file)return;setBusy(true);setStage('Uploading video…');setUploadProgress(0);setError('');setClip(null);setAnalysis(null);try{const fd=new FormData();fd.append('file',file);const d=await new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',api+'/api/upload');xhr.timeout=15*60*1000;xhr.upload.onprogress=e=>{if(e.lengthComputable)setUploadProgress(Math.round(e.loaded/e.total*100))};xhr.onload=()=>{let body={};try{body=xhr.responseText?JSON.parse(xhr.responseText):{}}catch{reject(new Error('Server ne invalid response diya. Upload dobara try karo.'));return}if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.detail||'Upload failed (HTTP '+xhr.status+').'))};xhr.onerror=()=>reject(new Error('Network connection lost during upload. Please retry with a smaller file or a more stable connection.'));xhr.ontimeout=()=>reject(new Error('Upload timed out after 15 minutes. Free hosting may not support a file this large.'));xhr.onabort=()=>reject(new Error('Upload cancelled.'));xhr.send(fd)});setUploadProgress(100);setUploaded(d)}catch(e){setError(e.message)}finally{setBusy(false);setStage('')}}
- async function importUrl(){if(!sourceUrl.trim())return;setBusy(true);setStage('Importing video from link…');setError('');setClip(null);setAnalysis(null);try{const d=await request('/api/import-url',{url:sourceUrl.trim()});setUploaded(d);setFile(null);setUploadProgress(100)}catch(e){setError(e.message)}finally{setBusy(false);setStage('')}}
- async function analyze(){if(!uploaded)return;setBusy(true);setStage('Listening and finding moments…');setError('');try{const job=await request('/api/analyze',{filename:uploaded.filename,clip_length:Number(duration),clip_count:Number(clipCount)});const d=await waitForJob(job.job_id);setAnalysis(d);if(d.highlights?.length){setStart(d.highlights[0].start);setDuration(Number(duration))}}catch(e){setError(e.message)}finally{setBusy(false);setStage('')}}
- async function render(){if(!uploaded)return;setBusy(true);setStage('Rendering your vertical clip…');setError('');try{const job=await request('/api/render',{filename:uploaded.filename,start:Number(start),duration:Number(duration),captions});const d=await waitForJob(job.job_id);setClip(api+d.url)}catch(e){setError(e.message)}finally{setBusy(false);setStage('')}}
- return <main><nav><div className="brand"><span className="logo"><Scissors size={19}/></span>clipai</div><span className="tag">AI VIDEO WORKSPACE</span></nav><section className="hero"><div className="eyebrow"><Sparkles size={14}/> YOUR SHORT-FORM STUDIO</div><h1>Long videos.<br/><span>Viral potential.</span></h1><p>Find the moments worth sharing. Turn them into vertical clips with captions.</p></section>
- <section className="workspace"><div className="panel-head"><div><div className="step">01 / UPLOAD</div><h2>Bring your video</h2></div><Film size={22}/></div><label className="drop"><input type="file" accept="video/mp4,video/quicktime,video/webm,.m4v" onChange={e=>{setFile(e.target.files?.[0]||null);setUploaded(null);setClip(null);setAnalysis(null)}}/><Upload size={28}/><strong>{file?file.name:'Drop your video here'}</strong><span>{file?Math.round(file.size/1024/1024)+' MB · Ready to upload':'MP4, MOV or WEBM · No app-side size cap (server storage limits apply)'}</span></label><button className="primary" disabled={!file||busy} onClick={upload}><Upload size={17}/> Upload video</button><div className="link-import"><div className="step">OR IMPORT FROM LINK</div><input aria-label="Video link" type="url" placeholder="Paste YouTube, TikTok, Instagram, Facebook, Twitch or X link" value={sourceUrl} onChange={e=>setSourceUrl(e.target.value)}/><button className="secondary" disabled={!sourceUrl.trim()||busy} onClick={importUrl}>Import video link</button><small>Public videos only. Private/login-only links may not work.</small></div>
- {uploaded&&<div className="success"><CheckCircle2 size={17}/> Uploaded successfully</div>}
- <div className="divider"></div><div className="panel-head"><div><div className="step">02 / AI ANALYSIS</div><h2>Find the best moments</h2></div><WandSparkles size={22}/></div><p className="hint">AI transcription scans the dialogue and suggests short, engaging sections.</p><button className="secondary" disabled={!uploaded||busy} onClick={analyze}>{busy&&stage.includes('Listening')?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>} Find clip moments</button>
- {analysis&&<div className="analysis"><div className="success"><CheckCircle2 size={17}/> Transcript ready · {analysis.language?.toUpperCase()}</div>{analysis.highlights.map((h,i)=><button className={'highlight '+(Number(start)===h.start?'selected':'')} key={i} onClick={()=>{setStart(h.start);setClip(null)}}><span className="score">{Math.round(h.score)}</span><span className="moment"><b>{Math.floor(h.start/60)}:{String(Math.floor(h.start%60)).padStart(2,'0')} · {h.duration}s</b><small>{h.text}</small></span><span className="pick">USE</span></button>)}</div>}
- <div className="divider"></div><div className="panel-head"><div><div className="step">03 / EDIT & EXPORT</div><h2>Shape your clip</h2></div><Scissors size={22}/></div><div className="controls"><label>Start time <div className="field"><input type="number" min="0" step="0.5" value={start} onChange={e=>setStart(e.target.value)}/><span>seconds</span></div></label><label>Clip length <select className="choice" value={duration} onChange={e=>setDuration(Number(e.target.value))}><option value="30">30 seconds</option><option value="60">60 seconds</option></select></label><label>Number of clips <select className="choice" value={clipCount} onChange={e=>setClipCount(Number(e.target.value))}><option value="10">10 clips</option><option value="20">20 clips</option><option value="30">30 clips</option><option value="40">40 clips</option></select></label></div><label className="caption-toggle"><input type="checkbox" checked={captions} onChange={e=>setCaptions(e.target.checked)}/><Captions size={17}/> Burn subtitles into video</label><div className="format"><span>OUTPUT FORMAT</span><strong>9:16 <small>VERTICAL · 1080 × 1920</small></strong></div><button className="primary render" disabled={!uploaded||busy} onClick={render}>{busy&&stage.includes('Rendering')?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>} Create vertical clip</button>
- {busy&&<div className="progress">{stage}{stage.includes('Uploading')&&<><b>{uploadProgress}%</b><div className="upload-track"><span style={{width:uploadProgress+'%'}}/></div><small>{Math.round(file.size*uploadProgress/100/1024/1024)} MB of {Math.ceil(file.size/1024/1024)} MB sent</small></>}</div>}{error&&<div className="error">{error}</div>}{clip&&<div className="result"><div className="success"><CheckCircle2 size={17}/> Your clip is ready</div><video controls src={clip}/><a className="download" href={clip} download><Download size={17}/> Download clip</a></div>}
- </section><footer>CLIPAI <span>·</span> MADE FOR THE NEXT SCROLL</footer></main>
+ async function readResponse(r){
+   const raw=await r.text();let d={};
+   try{d=raw?JSON.parse(raw):{}}catch{throw new Error('Server se invalid response mila. Service restart/deploy ho sakta hai. Thodi der baad retry karein.')}
+   if(!r.ok)throw new Error(d.detail||d.error||('Request failed (HTTP '+r.status+').'));
+   return d;
+ }
+ async function request(path,body){
+   const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   return readResponse(r);
+ }
+ async function waitForJob(jobId){
+   const deadline=Date.now()+45*60*1000;
+   while(Date.now()<deadline){
+     await new Promise(resolve=>setTimeout(resolve,2500));
+     const r=await fetch(api+'/api/jobs/'+jobId);
+     const d=await readResponse(r);
+     if(d.status==='completed')return d.result;
+     if(d.status==='failed')throw new Error(d.error||'Video processing failed.');
+   }
+   throw new Error('Processing took too long. Try fewer clips or a shorter video.');
+ }
+ function resetOutput(){setClips([]);setAnalysis(null);setError('');setClipProgress({done:0,total:0});}
+ async function upload(){
+   if(!file)return;setBusy(true);setStage('Uploading video…');setUploadProgress(0);resetOutput();
+   try{
+     const fd=new FormData();fd.append('file',file);
+     const d=await new Promise((resolve,reject)=>{
+       const xhr=new XMLHttpRequest();xhr.open('POST',api+'/api/upload');xhr.timeout=30*60*1000;
+       xhr.upload.onprogress=e=>{if(e.lengthComputable)setUploadProgress(Math.round(e.loaded/e.total*100));};
+       xhr.onload=()=>{let body={};try{body=xhr.responseText?JSON.parse(xhr.responseText):{};}catch{reject(new Error('Server ne invalid response diya. Upload retry karein.'));return;}
+         if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.detail||'Upload failed (HTTP '+xhr.status+').'));};
+       xhr.onerror=()=>reject(new Error('Network connection lost. Stable Wi-Fi ya smaller video try karein.'));
+       xhr.ontimeout=()=>reject(new Error('Upload timeout. Free server ki upload limit ho sakti hai.'));
+       xhr.send(fd);
+     });
+     setUploadProgress(100);setUploaded(d);
+   }catch(e){setError(e.message);}finally{setBusy(false);setStage('');}
+ }
+ async function importUrl(){
+   if(!sourceUrl.trim())return;setBusy(true);setStage('Importing video from link…');resetOutput();
+   try{const d=await request('/api/import-url',{url:sourceUrl.trim()});setUploaded(d);setFile(null);setUploadProgress(100);}
+   catch(e){setError(e.message);}finally{setBusy(false);setStage('');}
+ }
+ async function generateAll(){
+   if(!uploaded)return;
+   setBusy(true);setError('');setClips([]);setClipProgress({done:0,total:0});
+   try{
+     setStage('AI is finding the best moments…');
+     const job=await request('/api/analyze',{filename:uploaded.filename,clip_length:Number(duration),clip_count:Number(clipCount)});
+     const data=await waitForJob(job.job_id);setAnalysis(data);
+     const moments=(data.highlights||[]).slice(0,Number(clipCount));
+     if(!moments.length)throw new Error('Is video mein clear speech/moments nahi mile. Audio wala video try karein.');
+     setClipProgress({done:0,total:moments.length});
+     const ready=[];
+     for(let i=0;i<moments.length;i++){
+       setStage('Creating clip '+(i+1)+' of '+moments.length+'…');
+       const h=moments[i];
+       const renderJob=await request('/api/render',{filename:uploaded.filename,start:Number(h.start),duration:Math.max(1,Math.min(Number(duration),Number(h.duration))),captions});
+       const result=await waitForJob(renderJob.job_id);
+       ready.push({...result,index:i+1,start:h.start,score:h.score,text:h.text});
+       setClips([...ready]);setClipProgress({done:ready.length,total:moments.length});
+     }
+     setStage('All clips are ready!');
+   }catch(e){setError(e.message);}
+   finally{setBusy(false);}
+ }
+ return <main>
+  <nav><div className="brand"><span className="logo"><Scissors size={19}/></span>clipai</div><span className="tag">AI VIDEO WORKSPACE</span></nav>
+  <section className="hero"><div className="eyebrow"><Sparkles size={14}/> YOUR SHORT-FORM STUDIO</div><h1>Long videos.<br/><span>Ready-to-post clips.</span></h1><p>Upload once. AI finds moments, creates vertical clips and lets you download every result.</p></section>
+  <section className="workspace">
+   <div className="panel-head"><div><div className="step">01 / VIDEO</div><h2>Upload your long video</h2></div><Film size={22}/></div>
+   <label className="drop"><input type="file" accept="video/mp4,video/quicktime,video/webm,.m4v" onChange={e=>{setFile(e.target.files?.[0]||null);setUploaded(null);resetOutput();}}/><Upload size={28}/><strong>{file?file.name:'Choose a video from your device'}</strong><span>{file?Math.round(file.size/1024/1024)+' MB · Ready':'MP4, MOV or WEBM'}</span></label>
+   <button className="primary" disabled={!file||busy} onClick={upload}><Upload size={17}/> Upload video</button>
+   <div className="link-import"><div className="step">OR PASTE A PUBLIC VIDEO LINK</div><input aria-label="Video link" type="url" placeholder="YouTube, TikTok, Instagram, Facebook, Twitch or X" value={sourceUrl} onChange={e=>setSourceUrl(e.target.value)}/><button className="secondary" disabled={!sourceUrl.trim()||busy} onClick={importUrl}>Import video link</button><small>Public videos only. Private/login-required links may not work.</small></div>
+   {uploaded&&<div className="success"><CheckCircle2 size={17}/> Video ready: {uploaded.original_name||uploaded.filename}</div>}
+   {busy&&stage.includes('Uploading')&&<div className="progress">{stage}<b>{uploadProgress}%</b><div className="upload-track"><span style={{width:uploadProgress+'%'}}/></div></div>}
+   <div className="divider"></div>
+   <div className="panel-head"><div><div className="step">02 / AUTO CLIP GENERATOR</div><h2>Generate all clips</h2></div><WandSparkles size={22}/></div>
+   <p className="hint">AI transcribes your video, picks separate moments and renders every clip in 9:16 with optional captions.</p>
+   <div className="controls">
+    <label>Clip length<select className="choice" value={duration} onChange={e=>setDuration(Number(e.target.value))}><option value="30">30 seconds</option><option value="60">60 seconds</option></select></label>
+    <label>Number of clips<select className="choice" value={clipCount} onChange={e=>setClipCount(Number(e.target.value))}><option value="10">10 clips</option><option value="20">20 clips</option><option value="30">30 clips</option><option value="40">40 clips</option></select></label>
+   </div>
+   <label className="caption-toggle"><input type="checkbox" checked={captions} onChange={e=>setCaptions(e.target.checked)}/><Captions size={17}/> Burn subtitles into video</label>
+   <div className="format"><span>OUTPUT</span><strong>9:16 <small>VERTICAL SHORT VIDEO</small></strong></div>
+   <button className="primary render" disabled={!uploaded||busy} onClick={generateAll}>{busy?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>} {busy?'Generating clips…':'Generate all clips automatically'}</button>
+   {busy&&!stage.includes('Uploading')&&<div className="progress">{stage}{clipProgress.total>0&&<><b>{clipProgress.done} / {clipProgress.total} clips ready</b><div className="upload-track"><span style={{width:(clipProgress.done/clipProgress.total*100)+'%'}}/></div></>}</div>}
+   {error&&<div className="error">{error}</div>}
+   {clips.length>0&&<div className="results"><div className="success"><CheckCircle2 size={17}/> {clips.length} clip(s) ready to download</div><div className="clip-grid">{clips.map(c=><article className="clip-card" key={c.filename}><div className="clip-title">CLIP {c.index} · {Math.round(c.score||0)} SCORE</div><video controls playsInline preload="metadata" src={api+c.url}/><p>{c.text||'AI selected moment'}</p><a className="download" href={api+c.url} download={'clipai-clip-'+c.index+'.mp4'} type="video/mp4"><Download size={17}/> Download to device</a></article>)}</div><p className="gallery-note">On Android, tap Download to device. The MP4 is saved in Downloads; your Gallery app may show it automatically or after scanning the file.</p></div>}
+  </section>
+  <footer>CLIPAI <span>·</span> MADE FOR THE NEXT SCROLL</footer>
+ </main>;
 }
 createRoot(document.getElementById('root')).render(<App/>);
