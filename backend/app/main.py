@@ -1,6 +1,7 @@
 import os, re, shutil, subprocess, uuid
 from pathlib import Path
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +15,8 @@ OUTPUTS.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "0"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else 0
 TRANSCRIPTS = {}
+JOBS = {}
+JOB_POOL = ThreadPoolExecutor(max_workers=1)
 
 app = FastAPI(title="Clipai API", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -112,12 +115,31 @@ async def upload_video(file: UploadFile = File(...)):
         raise
     return {"filename": name, "original_name": file.filename, "size": size}
 
+def _run_analysis(job_id, filename):
+    JOBS[job_id]["status"] = "running"
+    try:
+        transcript = transcribe(filename)
+        JOBS[job_id].update(status="completed", result={**transcript, "highlights": find_highlights(transcript["segments"], transcript["duration"])})
+    except HTTPException as exc:
+        JOBS[job_id].update(status="failed", error=str(exc.detail))
+    except Exception as exc:
+        JOBS[job_id].update(status="failed", error=str(exc)[:500])
+
 @app.post("/api/analyze")
 def analyze_video(payload: dict):
     filename = str(payload.get("filename", ""))
     safe_upload(filename)
-    transcript = transcribe(filename)
-    return {**transcript, "highlights": find_highlights(transcript["segments"], transcript["duration"])}
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {"status": "queued", "type": "analysis"}
+    JOB_POOL.submit(_run_analysis, job_id, filename)
+    return {"job_id": job_id}
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found. The free server may have restarted; please retry.")
+    return job
 
 def make_srt(segments, clip_start, clip_end, path):
     def stamp(seconds):
@@ -134,8 +156,7 @@ def make_srt(segments, clip_start, clip_end, path):
     path.write_text("\n".join(rows), encoding="utf-8")
     return idx > 1
 
-@app.post("/api/render")
-def render_clip(req: RenderRequest):
+def _render_clip(req: RenderRequest):
     source = safe_upload(req.filename)
     if req.aspect != "9:16":
         raise HTTPException(400, "Only 9:16 output is currently supported.")
@@ -161,6 +182,24 @@ def render_clip(req: RenderRequest):
     if result.returncode:
         raise HTTPException(500, result.stderr[-1400:] or "FFmpeg render failed.")
     return {"filename": output_name, "url": f"/media/{output_name}", "captions": use_captions}
+
+def _run_render(job_id, payload):
+    JOBS[job_id]["status"] = "running"
+    try:
+        result = _render_clip(RenderRequest(**payload))
+        JOBS[job_id].update(status="completed", result=result)
+    except HTTPException as exc:
+        JOBS[job_id].update(status="failed", error=str(exc.detail))
+    except Exception as exc:
+        JOBS[job_id].update(status="failed", error=str(exc)[:500])
+
+@app.post("/api/render")
+def render_clip(req: RenderRequest):
+    safe_upload(req.filename)
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {"status": "queued", "type": "render"}
+    JOB_POOL.submit(_run_render, job_id, req.dict())
+    return {"job_id": job_id}
 
 # Serve the built React app from the same origin as the API.
 WEB = ROOT.parent / "frontend" / "dist"
