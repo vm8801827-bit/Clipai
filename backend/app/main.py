@@ -1,4 +1,5 @@
 import os, re, shutil, subprocess, uuid
+from urllib.parse import urlparse
 from pathlib import Path
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
@@ -90,6 +91,35 @@ def find_highlights(segments, duration, clip_length=30, limit=20):
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "clipai-api", "version": "0.2.0"}
+
+@app.post("/api/import-url")
+def import_video_url(payload: dict):
+    raw_url = str(payload.get("url", "")).strip()
+    parsed = urlparse(raw_url)
+    host = (parsed.hostname or "").lower()
+    allowed = ("youtube.com", "youtu.be", "tiktok.com", "instagram.com", "facebook.com", "fb.watch", "twitch.tv", "x.com", "twitter.com")
+    if parsed.scheme not in ("http", "https") or not any(host == d or host.endswith("." + d) for d in allowed):
+        raise HTTPException(400, "Paste a public video URL from YouTube, TikTok, Instagram, Facebook, Twitch or X.")
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(503, "FFmpeg is not installed on the server.")
+    name = f"{uuid.uuid4().hex}.%(ext)s"
+    template = str(UPLOADS / name)
+    try:
+        result = subprocess.run(
+            ["python", "-m", "yt_dlp", "--no-playlist", "--restrict-filenames",
+             "--merge-output-format", "mp4", "--max-filesize", "2G",
+             "-f", "bv*+ba/b", "-o", template, raw_url],
+            capture_output=True, text=True, timeout=900
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Link import timed out. Try a shorter/public video or upload the file directly.")
+    if result.returncode:
+        raise HTTPException(422, "Could not import this link. It may be private, restricted, unsupported, or require sign-in. " + (result.stderr[-500:] or ""))
+    matches = sorted(UPLOADS.glob(name.replace("%(ext)s", "*")), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not matches:
+        raise HTTPException(500, "The platform did not return a downloadable video.")
+    path = matches[0]
+    return {"filename": path.name, "original_name": path.name, "size": path.stat().st_size, "source": "url"}
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
