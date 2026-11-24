@@ -1,0 +1,18 @@
+import React, {useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {Upload, Scissors, Download, Sparkles, Film, LoaderCircle, CheckCircle2} from 'lucide-react';
+import './style.css';
+
+function App(){
+ const [file,setFile]=useState(null),[uploaded,setUploaded]=useState(null),[start,setStart]=useState(0),[duration,setDuration]=useState(30),[busy,setBusy]=useState(false),[clip,setClip]=useState(null),[error,setError]=useState('');
+ const api=import.meta.env.VITE_API_URL||'';
+ async function upload(){if(!file)return;setBusy(true);setError('');setClip(null);try{const fd=new FormData();fd.append('file',file);const r=await fetch(api+'/api/upload',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Upload failed');setUploaded(d)}catch(e){setError(e.message)}finally{setBusy(false)}}
+ async function render(){if(!uploaded)return;setBusy(true);setError('');try{const r=await fetch(api+'/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:uploaded.filename,start:Number(start),duration:Number(duration)})});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Render failed');setClip(api+d.url)}catch(e){setError(e.message)}finally{setBusy(false)}}
+ return <main><nav><div className="brand"><span className="logo"><Scissors size={19}/></span>clipai</div><span className="tag">VIDEO WORKSPACE</span></nav><section className="hero"><div className="eyebrow"><Sparkles size={14}/> YOUR SHORT-FORM STUDIO</div><h1>Long videos.<br/><span>Viral potential.</span></h1><p>Turn your footage into vertical clips ready for Shorts, Reels and TikTok.</p></section>
+ <section className="workspace"><div className="panel-head"><div><div className="step">01 / UPLOAD</div><h2>Bring your video</h2></div><Film size={22}/></div><label className="drop"><input type="file" accept="video/mp4,video/quicktime,video/webm,.m4v" onChange={e=>{setFile(e.target.files?.[0]||null);setUploaded(null);setClip(null)}}/><Upload size={28}/><strong>{file?file.name:'Drop your video here'}</strong><span>{file?'Ready to upload':'MP4, MOV or WEBM · Select a file'}</span></label><button className="primary" disabled={!file||busy} onClick={upload}>{busy&&!uploaded?<LoaderCircle className="spin" size={17}/>:<Upload size={17}/>} Upload video</button>
+ {uploaded&&<div className="success"><CheckCircle2 size={17}/> Uploaded successfully</div>}
+ <div className="divider"></div><div className="panel-head"><div><div className="step">02 / EDIT</div><h2>Shape your clip</h2></div><Scissors size={22}/></div><div className="controls"><label>Start time <div className="field"><input type="number" min="0" step="0.5" value={start} onChange={e=>setStart(e.target.value)}/><span>seconds</span></div></label><label>Clip length <div className="field"><input type="number" min="1" max="180" value={duration} onChange={e=>setDuration(e.target.value)}/><span>seconds</span></div></label></div><div className="format"><span>OUTPUT FORMAT</span><strong>9:16 <small>VERTICAL · 1080 × 1920</small></strong></div><button className="primary render" disabled={!uploaded||busy} onClick={render}>{busy&&uploaded?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>} Create vertical clip</button>
+ {error&&<div className="error">{error}</div>}{clip&&<div className="result"><div className="success"><CheckCircle2 size={17}/> Your clip is ready</div><video controls src={clip}/><a className="download" href={clip} download><Download size={17}/> Download clip</a></div>}
+ </section><footer>CLIPAI <span>·</span> MADE FOR THE NEXT SCROLL</footer></main>
+}
+createRoot(document.getElementById('root')).render(<App/>);
