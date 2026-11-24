@@ -11,7 +11,8 @@ STORAGE = Path(os.getenv("CLIPAI_STORAGE", ROOT / "storage"))
 UPLOADS, OUTPUTS = STORAGE / "uploads", STORAGE / "outputs"
 UPLOADS.mkdir(parents=True, exist_ok=True)
 OUTPUTS.mkdir(parents=True, exist_ok=True)
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "0"))\nMAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else 0
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "0"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else 0
 TRANSCRIPTS = {}
 
 app = FastAPI(title="Clipai API", version="0.2.0")
@@ -99,8 +100,12 @@ async def upload_video(file: UploadFile = File(...)):
         with dest.open("wb") as out:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(413, f"Video exceeds {MAX_UPLOAD_BYTES // (1024*1024)} MB limit.")
+                if MAX_UPLOAD_BYTES and size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, f"Video exceeds the configured {MAX_UPLOAD_MB} MB application limit.")
+                # Free hosts have finite temporary storage. Keep a safety reserve rather than
+                # allowing a large upload to fill the service disk and crash the app.
+                if shutil.disk_usage(STORAGE).free < len(chunk) + 64 * 1024 * 1024:
+                    raise HTTPException(507, "Not enough temporary storage on the free server for this video. Try a smaller/compressed file.")
                 out.write(chunk)
     except Exception:
         dest.unlink(missing_ok=True)
