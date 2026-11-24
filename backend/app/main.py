@@ -44,15 +44,28 @@ def whisper_model():
     except ImportError:
         raise HTTPException(503, "Speech recognition is unavailable. Install faster-whisper.")
     model_size = os.getenv("WHISPER_MODEL", "small")
-    return WhisperModel(model_size, device=os.getenv("WHISPER_DEVICE", "cpu"), compute_type=os.getenv("WHISPER_COMPUTE", "int8"))
+    return WhisperModel(model_size, device=os.getenv("WHISPER_DEVICE", "cpu"), compute_type=os.getenv("WHISPER_COMPUTE", "int8"), cpu_threads=1, num_workers=1)
 
 def transcribe(filename):
     if filename in TRANSCRIPTS:
         return TRANSCRIPTS[filename]
     source = safe_upload(filename)
     try:
-        segments, info = whisper_model().transcribe(str(source), vad_filter=True, word_timestamps=False)
-        items = [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()} for s in segments if s.text.strip()]
+        # Decode only the audio stream to a small mono 16 kHz WAV before Whisper.
+        # Passing a large video container directly makes PyAV decode/cache much more data
+        # than needed and can exhaust the memory on small free instances.
+        audio_path = UPLOADS / f"{uuid.uuid4().hex}-audio.wav"
+        try:
+            extracted = subprocess.run(
+                ["ffmpeg", "-nostdin", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path)],
+                capture_output=True, text=True, timeout=900
+            )
+            if extracted.returncode:
+                raise HTTPException(422, "Could not extract audio from this video. Try an MP4 with a clear audio track.")
+            segments, info = whisper_model().transcribe(str(audio_path), vad_filter=True, word_timestamps=False, beam_size=1)
+            items = [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()} for s in segments if s.text.strip()]
+        finally:
+            audio_path.unlink(missing_ok=True)
     except HTTPException:
         raise
     except Exception as exc:
