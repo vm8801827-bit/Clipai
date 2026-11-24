@@ -3,7 +3,12 @@ services:
     name: clipai
     runtime: docker
     plan: starter
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.12"
+      - key: PORT
+        value: "10000"
+      - key: WHISPER_MODEL
+        value: "small"
+      - key: MAX_UPLOAD_MB
+        value: "500"
