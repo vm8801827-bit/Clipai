@@ -131,7 +131,7 @@ async def upload_video(file: UploadFile = File(...)):
     size = 0
     try:
         with dest.open("wb") as out:
-            while chunk := await file.read(1024 * 1024):
+            while chunk := await file.read(4 * 1024 * 1024):
                 size += len(chunk)
                 if MAX_UPLOAD_BYTES and size > MAX_UPLOAD_BYTES:
                     raise HTTPException(413, f"Video exceeds the configured {MAX_UPLOAD_MB} MB application limit.")
