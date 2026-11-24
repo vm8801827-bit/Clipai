@@ -11,7 +11,7 @@ STORAGE = Path(os.getenv("CLIPAI_STORAGE", ROOT / "storage"))
 UPLOADS, OUTPUTS = STORAGE / "uploads", STORAGE / "outputs"
 UPLOADS.mkdir(parents=True, exist_ok=True)
 OUTPUTS.mkdir(parents=True, exist_ok=True)
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "500")) * 1024 * 1024
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "0"))\nMAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else 0
 TRANSCRIPTS = {}
 
 app = FastAPI(title="Clipai API", version="0.2.0")
