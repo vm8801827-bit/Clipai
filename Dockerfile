@@ -9,7 +9,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt ./backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt
+RUN python -m pip install --upgrade pip && python -m pip install --no-cache-dir -r backend/requirements.txt && python -c "from faster_whisper import WhisperModel; print('faster-whisper import OK')"
 COPY backend/ ./backend/
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 RUN mkdir -p /app/backend/storage/uploads /app/backend/storage/outputs
