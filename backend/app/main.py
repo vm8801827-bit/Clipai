@@ -29,6 +29,7 @@ class RenderRequest(BaseModel):
     duration: float = Field(gt=0, le=180)
     aspect: str = "9:16"
     captions: bool = True
+    caption_style: str = "classic"
 
 def safe_upload(filename):
     path = UPLOADS / Path(filename).name
@@ -211,7 +212,13 @@ def _render_clip(req: RenderRequest):
     vf = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
     if use_captions:
         escaped = str(subtitle).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        vf += f",subtitles='{escaped}':force_style='FontName=DejaVu Sans,FontSize=18,Outline=2,Shadow=1,Alignment=2,MarginV=140'"
+        styles = {
+            "classic": "FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=140",
+            "bold": "FontName=DejaVu Sans,FontSize=23,Bold=1,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=3,Shadow=1,Alignment=2,MarginV=150",
+            "minimal": "FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,Outline=1,Shadow=0,Alignment=2,MarginV=110"
+        }
+        style = styles.get(req.caption_style, styles["classic"])
+        vf += f",subtitles='{escaped}':force_style='{style}'"
     command = ["ffmpeg", "-y", "-ss", str(req.start), "-i", str(source), "-t", str(req.duration), "-vf", vf,
                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=900)
