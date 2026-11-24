@@ -208,12 +208,12 @@ def _render_clip(req: RenderRequest):
         use_captions = make_srt(transcript["segments"], req.start, req.start + req.duration, subtitle)
     output_name = f"clip-{uuid.uuid4().hex}.mp4"
     output = OUTPUTS / output_name
-    vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+    vf = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
     if use_captions:
         escaped = str(subtitle).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         vf += f",subtitles='{escaped}':force_style='FontName=DejaVu Sans,FontSize=18,Outline=2,Shadow=1,Alignment=2,MarginV=140'"
     command = ["ffmpeg", "-y", "-ss", str(req.start), "-i", str(source), "-t", str(req.duration), "-vf", vf,
-               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-movflags", "+faststart", str(output)]
+               "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=900)
     subtitle.unlink(missing_ok=True)
     if result.returncode:
