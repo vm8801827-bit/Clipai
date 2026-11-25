@@ -387,8 +387,18 @@ def _render_clip(req: RenderRequest):
         }
         style = styles.get(req.caption_style, styles["classic"])
         vf += f",subtitles='{escaped}'"
+    # Smooth audio edges and normalize loudness for more consistent social-video playback.
+    fade_duration = min(0.20, max(0.05, req.duration / 4.0))
+    fade_out_start = max(0.0, req.duration - fade_duration)
+    audio_filter = (
+        f"aresample=async=1:first_pts=0,"
+        f"afade=t=in:st=0:d={fade_duration:.3f},"
+        f"afade=t=out:st={fade_out_start:.3f}:d={fade_duration:.3f},"
+        "loudnorm=I=-16:TP=-1.5:LRA=11"
+    )
     command = ["ffmpeg", "-y", "-ss", str(req.start), "-i", str(source), "-t", str(req.duration), "-vf", vf,
-               "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output)]
+               "-af", audio_filter, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2",
+               "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(output)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=900)
     subtitle.unlink(missing_ok=True)
     title_file.unlink(missing_ok=True)
