@@ -18,6 +18,7 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else 0
 TRANSCRIPTS = {}
 JOBS = {}
 JOB_POOL = ThreadPoolExecutor(max_workers=1)
+DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=2)
 
 app = FastAPI(title="Clipai API", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -209,6 +210,35 @@ def find_highlights(segments, duration, clip_length=30, limit=20):
 def health():
     return {"ok": True, "service": "clipai-api", "version": "0.2.0"}
 
+def _run_import(job_id, raw_url):
+    JOBS[job_id]["status"] = "running"
+    name = f"{uuid.uuid4().hex}.%(ext)s"
+    template = str(UPLOADS / name)
+    try:
+        result = subprocess.run(
+            ["python", "-m", "yt_dlp", "--no-playlist", "--no-warnings",
+             "--newline", "--retries", "3", "--fragment-retries", "3",
+             "--concurrent-fragments", "8", "--socket-timeout", "20",
+             "--restrict-filenames", "--merge-output-format", "mp4",
+             "--max-filesize", "2G", "-f", "best[height<=720]/best",
+             "-o", template, raw_url],
+            capture_output=True, text=True, timeout=900
+        )
+        if result.returncode:
+            raise RuntimeError("Could not import this link. It may be private, login-required, restricted, or unsupported. " + (result.stderr[-500:] or ""))
+        matches = sorted(UPLOADS.glob(name.replace("%(ext)s", "*")), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not matches:
+            raise RuntimeError("The platform did not return a downloadable video.")
+        path = matches[0]
+        JOBS[job_id].update(status="completed", result={
+            "filename": path.name, "original_name": path.name,
+            "size": path.stat().st_size, "source": "url"
+        })
+    except subprocess.TimeoutExpired:
+        JOBS[job_id].update(status="failed", error="Link import timed out. Try a shorter/public video or upload the file directly.")
+    except Exception as exc:
+        JOBS[job_id].update(status="failed", error=str(exc)[:900])
+
 @app.post("/api/import-url")
 def import_video_url(payload: dict):
     raw_url = str(payload.get("url", "")).strip()
@@ -219,24 +249,12 @@ def import_video_url(payload: dict):
         raise HTTPException(400, "Paste a public video URL from YouTube, TikTok, Instagram, Facebook, Twitch or X.")
     if not shutil.which("ffmpeg"):
         raise HTTPException(503, "FFmpeg is not installed on the server.")
-    name = f"{uuid.uuid4().hex}.%(ext)s"
-    template = str(UPLOADS / name)
-    try:
-        result = subprocess.run(
-            ["python", "-m", "yt_dlp", "--no-playlist", "--restrict-filenames",
-             "--merge-output-format", "mp4", "--max-filesize", "2G",
-             "-f", "bv*+ba/b", "-o", template, raw_url],
-            capture_output=True, text=True, timeout=900
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(504, "Link import timed out. Try a shorter/public video or upload the file directly.")
-    if result.returncode:
-        raise HTTPException(422, "Could not import this link. It may be private, restricted, unsupported, or require sign-in. " + (result.stderr[-500:] or ""))
-    matches = sorted(UPLOADS.glob(name.replace("%(ext)s", "*")), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not matches:
-        raise HTTPException(500, "The platform did not return a downloadable video.")
-    path = matches[0]
-    return {"filename": path.name, "original_name": path.name, "size": path.stat().st_size, "source": "url"}
+    if not shutil.which("python"):
+        raise HTTPException(503, "Python runtime is unavailable on the server.")
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {"status": "queued", "type": "import"}
+    DOWNLOAD_POOL.submit(_run_import, job_id, raw_url)
+    return {"job_id": job_id}
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
@@ -248,7 +266,7 @@ async def upload_video(file: UploadFile = File(...)):
     size = 0
     try:
         with dest.open("wb") as out:
-            while chunk := await file.read(4 * 1024 * 1024):
+            while chunk := await file.read(8 * 1024 * 1024):
                 size += len(chunk)
                 if MAX_UPLOAD_BYTES and size > MAX_UPLOAD_BYTES:
                     raise HTTPException(413, f"Video exceeds the configured {MAX_UPLOAD_MB} MB application limit.")
