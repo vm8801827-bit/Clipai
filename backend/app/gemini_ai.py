@@ -25,7 +25,7 @@ def analyze_video_with_gemini(source, transcript, clip_length, limit):
             prompt = (
                 "Act as an expert short-form video editor. Analyze the actual video visuals and audio "
                 "together with this timestamped transcript. Find up to %s distinct self-contained "
-                "moments, each no longer than %s seconds. Do not choose by keywords alone. Prefer "
+                "moments, each exactly %s seconds when the source video is long enough (if the source is shorter, use its full duration). Do not choose by keywords alone. Prefer "
                 "strong hooks, funny or emotional reactions, useful insights, surprising reveals, "
                 "demonstrations, story turns and satisfying payoffs. Reject greetings, introductions, "
                 "repetition, dead air and contextless fragments. Use original-video timestamps in seconds. "
@@ -65,13 +65,19 @@ def analyze_video_with_gemini(source, transcript, clip_length, limit):
                     end = min(duration, float(item["end"]))
                 except (KeyError, TypeError, ValueError):
                     continue
-                if end <= start or end - start < 8:
+                if end <= start or end - start < 3:
                     continue
-                if end - start > clip_length:
-                    end = start + clip_length
-                if end > duration:
-                    end = duration
-                    start = max(0.0, end - clip_length)
+                # Enforce the user's selected output length. Gemini may suggest a short
+                # moment, but the editor should return a full-length window whenever
+                # the uploaded source contains enough footage.
+                target_length = min(float(clip_length), duration)
+                center = (start + end) / 2.0
+                start = max(0.0, min(start, duration - target_length))
+                if end - start < target_length:
+                    start = max(0.0, min(center - target_length / 2.0, duration - target_length))
+                end = min(duration, start + target_length)
+                if end - start < min(3.0, target_length):
+                    continue
                 spoken = " ".join(x["text"] for x in transcript["segments"] if x["start"] < end and x["end"] > start)
                 clips.append({
                     "start": round(start, 2), "end": round(end, 2), "duration": round(end-start, 2),
