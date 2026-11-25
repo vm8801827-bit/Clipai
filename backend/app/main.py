@@ -310,8 +310,16 @@ def _run_analysis(job_id, filename, payload):
         if clip_count not in (10, 20, 30, 40):
             clip_count = 10
         source = safe_upload(filename)
-        highlights = analyze_video_with_gemini(source, transcript, clip_length, clip_count)
-        JOBS[job_id].update(status="completed", result={**transcript, "highlights": highlights, "analysis_engine": "Gemini video understanding"})
+        try:
+            highlights = analyze_video_with_gemini(source, transcript, clip_length, clip_count)
+            engine = "Gemini video understanding"
+        except Exception as gemini_error:
+            # Keep clip generation usable when Gemini is temporarily overloaded or unavailable.
+            highlights = find_highlights(transcript["segments"], transcript["duration"], clip_length, clip_count)
+            if not highlights:
+                raise gemini_error
+            engine = "Transcript fallback (Gemini temporarily unavailable)"
+        JOBS[job_id].update(status="completed", result={**transcript, "highlights": highlights, "analysis_engine": engine})
     except HTTPException as exc:
         JOBS[job_id].update(status="failed", error=str(exc.detail))
     except Exception as exc:
