@@ -215,7 +215,19 @@ def find_highlights(segments, duration, clip_length=30, limit=20):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "clipai-api", "version": "0.2.0"}
+    """Expose safe deployment diagnostics without revealing secrets."""
+    import importlib.util
+    return {
+        "ok": True,
+        "service": "clipai-api",
+        "version": "0.2.0",
+        "checks": {
+            "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
+            "ffmpeg_available": bool(shutil.which("ffmpeg")),
+            "whisper_installed": importlib.util.find_spec("faster_whisper") is not None,
+            "storage_writable": os.access(STORAGE, os.W_OK),
+        },
+    }
 
 def _run_import(job_id, raw_url):
     JOBS[job_id]["status"] = "running"
