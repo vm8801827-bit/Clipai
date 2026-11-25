@@ -33,6 +33,7 @@ class RenderRequest(BaseModel):
     aspect: str = "9:16"
     captions: bool = True
     caption_style: str = "classic"
+    hook_title: str = Field(default="", max_length=120)
 
 def safe_upload(filename):
     path = UPLOADS / Path(filename).name
@@ -364,6 +365,7 @@ def _render_clip(req: RenderRequest):
         raise HTTPException(503, "FFmpeg is not installed on the server.")
     transcript = TRANSCRIPTS.get(req.filename)
     subtitle = OUTPUTS / f"{uuid.uuid4().hex}.ass"
+    title_file = OUTPUTS / f"{uuid.uuid4().hex}.txt"
     use_captions = False
     if req.captions:
         if not transcript:
@@ -372,6 +374,10 @@ def _render_clip(req: RenderRequest):
     output_name = f"clip-{uuid.uuid4().hex}.mp4"
     output = OUTPUTS / output_name
     vf = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
+    if req.hook_title.strip():
+        title_file.write_text(req.hook_title.strip()[:120], encoding="utf-8")
+        escaped_title = str(title_file).replace("\\\\", "\\\\\\\\").replace(":", "\\\\:").replace("'", "\\\\'")
+        vf += f",drawtext=textfile='{escaped_title}':font='DejaVu Sans':fontsize=38:fontcolor=white:borderw=3:bordercolor=black:box=1:boxcolor=black@0.48:boxborderw=16:x=(w-text_w)/2:y=150:enable='between(t,0,3.5)'"
     if use_captions:
         escaped = str(subtitle).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         styles = {
@@ -385,6 +391,7 @@ def _render_clip(req: RenderRequest):
                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=900)
     subtitle.unlink(missing_ok=True)
+    title_file.unlink(missing_ok=True)
     if result.returncode:
         raise HTTPException(500, result.stderr[-1400:] or "FFmpeg render failed.")
     return {"filename": output_name, "url": f"/media/{output_name}", "captions": use_captions}
