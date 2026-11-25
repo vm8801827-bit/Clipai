@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from app.gemini_ai import analyze_video_with_gemini
+from app.captions import make_ass
 
 ROOT = Path(__file__).resolve().parent.parent
 STORAGE = Path(os.getenv("CLIPAI_STORAGE", ROOT / "storage"))
@@ -64,8 +65,13 @@ def transcribe(filename):
             )
             if extracted.returncode:
                 raise HTTPException(422, "Could not extract audio from this video. Try an MP4 with a clear audio track.")
-            segments, info = whisper_model().transcribe(str(audio_path), vad_filter=True, word_timestamps=False, beam_size=1)
-            items = [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()} for s in segments if s.text.strip()]
+            segments, info = whisper_model().transcribe(str(audio_path), vad_filter=True, word_timestamps=True, beam_size=1)
+            items = []
+            for seg in segments:
+                if not seg.text.strip():
+                    continue
+                words = [{"start": round(w.start, 3), "end": round(w.end, 3), "text": w.word} for w in (seg.words or []) if w.start is not None and w.end is not None]
+                items.append({"start": round(seg.start, 2), "end": round(seg.end, 2), "text": seg.text.strip(), "words": words})
         finally:
             audio_path.unlink(missing_ok=True)
     except HTTPException:
@@ -337,12 +343,12 @@ def _render_clip(req: RenderRequest):
     if shutil.which("ffmpeg") is None:
         raise HTTPException(503, "FFmpeg is not installed on the server.")
     transcript = TRANSCRIPTS.get(req.filename)
-    subtitle = OUTPUTS / f"{uuid.uuid4().hex}.srt"
+    subtitle = OUTPUTS / f"{uuid.uuid4().hex}.ass"
     use_captions = False
     if req.captions:
         if not transcript:
             transcript = transcribe(req.filename)
-        use_captions = make_srt(transcript["segments"], req.start, req.start + req.duration, subtitle)
+        use_captions = make_ass(transcript["segments"], req.start, req.start + req.duration, subtitle, req.caption_style)
     output_name = f"clip-{uuid.uuid4().hex}.mp4"
     output = OUTPUTS / output_name
     vf = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
@@ -354,7 +360,7 @@ def _render_clip(req: RenderRequest):
             "minimal": "FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,Outline=1,Shadow=0,Alignment=2,MarginV=110"
         }
         style = styles.get(req.caption_style, styles["classic"])
-        vf += f",subtitles='{escaped}':force_style='{style}'"
+        vf += f",subtitles='{escaped}'"
     command = ["ffmpeg", "-y", "-ss", str(req.start), "-i", str(source), "-t", str(req.duration), "-vf", vf,
                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=900)
