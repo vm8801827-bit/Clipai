@@ -76,30 +76,133 @@ def transcribe(filename):
     TRANSCRIPTS[filename] = result
     return result
 
-HOOK_WORDS = {"wait", "what", "why", "how", "crazy", "insane", "never", "secret", "truth", "actually", "bro", "wow", "impossible", "mistake", "problem", "money", "love", "hate", "scared", "wild", "guess"}
+HOOK_WORDS = {
+    "wait", "what", "why", "how", "crazy", "insane", "never", "secret", "truth",
+    "actually", "wow", "impossible", "mistake", "problem", "money", "love",
+    "hate", "scared", "wild", "guess", "because", "but", "however", "imagine",
+    "remember", "listen", "seriously", "exactly", "finally", "discovered"
+}
+EMOTION_WORDS = {
+    "amazing", "awful", "beautiful", "best", "worst", "fail", "failed", "win",
+    "won", "shocking", "surprising", "terrible", "incredible", "ridiculous",
+    "crazy", "insane", "love", "hate", "fear", "secret", "truth", "mistake",
+    "success", "million", "billion", "free", "easy", "hard", "danger", "dangerous"
+}
+
 def find_highlights(segments, duration, clip_length=30, limit=20):
-    candidates = []
-    # Score overlapping transcript windows; these are heuristic suggestions, not a promise of virality.
-    for i, seg in enumerate(segments):
-        start = seg["start"]
-        end = min(duration, start + clip_length)
-        group = [s for s in segments if s["start"] < end and s["end"] > start]
-        text = " ".join(s["text"] for s in group).strip()
-        words = re.findall(r"[\w']+", text.lower())
-        if len(words) < 12:
+    """Rank complete speech moments, then select diverse non-overlapping windows.
+
+    This is a transparent transcript-based heuristic, not an LLM or a guarantee
+    that a clip will go viral. Candidate windows are aligned to speech boundaries
+    and ranked on hook, language, pacing, and completeness rather than fixed cuts.
+    """
+    if not segments or duration <= 0:
+        return []
+
+    clip_length = max(10, min(int(clip_length), 60))
+    limit = max(1, min(int(limit), 40))
+    clean = []
+    for seg in segments:
+        text = re.sub(r"\s+", " ", str(seg.get("text", ""))).strip()
+        try:
+            a, b = float(seg["start"]), float(seg["end"])
+        except (KeyError, TypeError, ValueError):
             continue
-        hooks = sum(1 for w in words if w in HOOK_WORDS)
-        punctuation = sum(text.count(p) for p in "!?")
-        density = min(len(words) / 35, 1.5)
-        score = round(min(99, 30 + hooks * 5 + punctuation * 4 + density * 15), 1)
-        candidates.append({"start": round(start, 1), "end": round(end, 1), "duration": round(end-start, 1), "score": score, "reason": "Strong conversational hook" if hooks else "Dense, continuous speech", "text": text[:420]})
-    candidates.sort(key=lambda x: x["score"], reverse=True)
+        if text and b > a and a < duration:
+            clean.append({"start": max(0.0, a), "end": min(float(duration), b), "text": text})
+    clean.sort(key=lambda x: x["start"])
+    if not clean:
+        return []
+
+    # Sentence-like boundaries give candidate clips a coherent beginning.
+    starts = set()
+    for i, seg in enumerate(clean):
+        starts.add(i)
+        if i and re.search(r"[.!?…][\"')\]]?$", clean[i-1]["text"]):
+            starts.add(i)
+    # Add a few later starts in long monologues, but avoid hundreds of near-identical windows.
+    starts = sorted(starts)
+    candidates = []
+    for i in starts:
+        clip_start = clean[i]["start"]
+        if clip_start >= duration - 5:
+            continue
+        clip_end = min(float(duration), clip_start + clip_length)
+        group = [s for s in clean if s["start"] < clip_end and s["end"] > clip_start]
+        if not group:
+            continue
+        spoken = " ".join(s["text"] for s in group).strip()
+        words = re.findall(r"[A-Za-z0-9']+", spoken.lower())
+        count = len(words)
+        if count < 18:
+            continue
+
+        first_sentence = re.split(r"(?<=[.!?])\s+", spoken, maxsplit=1)[0]
+        first_words = re.findall(r"[A-Za-z0-9']+", first_sentence.lower())
+        hook_count = sum(w in HOOK_WORDS for w in first_words[:18])
+        emotion_count = sum(w in EMOTION_WORDS for w in words)
+        questions = spoken.count("?")
+        exclamations = spoken.count("!")
+        numbers = len(re.findall(r"\b\d+(?:\.\d+)?%?\b", spoken))
+        contrast = len(re.findall(r"\b(but|however|instead|although|except|yet|turns out)\b", spoken.lower()))
+        direct_address = len(re.findall(r"\b(you|your|we|I|listen|look|imagine)\b", words.__str__()))
+        speech_duration = max(1.0, group[-1]["end"] - group[0]["start"])
+        words_per_second = count / speech_duration
+        pacing = max(0.0, 1.0 - abs(words_per_second - 2.35) / 2.35)
+        density = min(count / max(25.0, clip_length * 2.0), 1.0)
+        opening_bonus = 1.0 if re.match(r"^(why|how|what|wait|listen|imagine|the truth|here'?s|this is)\b", spoken.lower()) else 0.0
+        ending_bonus = 1.0 if re.search(r"[.!?][\"')\]]?$", group[-1]["text"]) else 0.0
+        # Penalize fragments that begin mid-sentence or are mostly silence.
+        fragment_penalty = 1.2 if i and not re.search(r"[.!?…][\"')\]]?$", clean[i-1]["text"]) else 0.0
+        silence_ratio = max(0.0, (clip_end - clip_start - speech_duration) / max(1.0, clip_end - clip_start))
+
+        raw = (
+            2.2 * min(hook_count, 3)
+            + 1.15 * min(emotion_count, 5)
+            + 1.6 * min(questions, 2)
+            + 0.7 * min(exclamations, 2)
+            + 0.8 * min(numbers, 3)
+            + 1.0 * min(contrast, 3)
+            + 2.0 * opening_bonus
+            + 1.0 * ending_bonus
+            + 3.0 * pacing
+            + 2.0 * density
+            - 3.0 * min(silence_ratio, 0.8)
+            - fragment_penalty
+        )
+        score = round(max(1.0, min(99.0, 35.0 + raw * 2.0)), 1)
+        reason_parts = []
+        if opening_bonus or hook_count:
+            reason_parts.append("strong opening hook")
+        if emotion_count >= 2 or exclamations:
+            reason_parts.append("emotional language")
+        if questions or contrast:
+            reason_parts.append("curiosity or story turn")
+        if pacing > 0.7:
+            reason_parts.append("good speech pacing")
+        reason = ", ".join(reason_parts[:3]) or "continuous, information-rich speech"
+        candidates.append({
+            "start": round(clip_start, 2),
+            "end": round(clip_end, 2),
+            "duration": round(clip_end - clip_start, 2),
+            "score": score,
+            "reason": reason,
+            "text": spoken[:600]
+        })
+
+    # Greedy diversity: prioritize quality while preventing duplicate/nearby clips.
+    candidates.sort(key=lambda x: (x["score"], len(x["text"])), reverse=True)
     selected = []
+    min_gap = max(12.0, clip_length * 0.55)
     for item in candidates:
-        if all(abs(item["start"] - old["start"]) > 18 for old in selected):
+        if all(
+            item["end"] <= old["start"] + min_gap or item["start"] >= old["end"] - min_gap
+            for old in selected
+        ):
             selected.append(item)
-        if len(selected) == limit:
+        if len(selected) >= limit:
             break
+    selected.sort(key=lambda x: x["start"])
     return selected
 
 @app.get("/api/health")
