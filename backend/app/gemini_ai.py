@@ -34,7 +34,7 @@ def analyze_video_with_gemini(source, transcript, clip_length, limit):
                 "Score editorial quality, not guaranteed virality. Transcript: %s"
             ) % (limit, clip_length, transcript_text[:24000])
             response = client.models.generate_content(
-                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+                model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
                 contents=[video, prompt],
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=5000)
             )
