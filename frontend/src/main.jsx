@@ -5,7 +5,7 @@ import './style.css';
 
 function App(){
  const [file,setFile]=useState(null),[sourceUrl,setSourceUrl]=useState(''),[uploaded,setUploaded]=useState(null);
- const [duration,setDuration]=useState(30),[busy,setBusy]=useState(false),[stage,setStage]=useState(''),[error,setError]=useState('');
+ const [duration,setDuration]=useState(30),[hookTitles,setHookTitles]=useState(true),[busy,setBusy]=useState(false),[stage,setStage]=useState(''),[error,setError]=useState('');
  const [analysis,setAnalysis]=useState(null),[captions,setCaptions]=useState(true),[uploadProgress,setUploadProgress]=useState(0),[clipCount,setClipCount]=useState(10);
  const [clips,setClips]=useState([]),[clipProgress,setClipProgress]=useState({done:0,total:0}),[selectedMoments,setSelectedMoments]=useState([]),[captionStyle,setCaptionStyle]=useState('classic');
  const api=import.meta.env.VITE_API_URL||'';
@@ -76,7 +76,7 @@ function App(){
      for(let i=0;i<chosen.length;i++){
        setStage('Creating clip '+(i+1)+' of '+chosen.length+'…');
        const h=chosen[i];
-       const renderJob=await request('/api/render',{filename:uploaded.filename,start:Number(h.start),duration:Math.max(1,Math.min(Number(duration),Number(h.duration))),captions,caption_style:captionStyle});
+       const renderJob=await request('/api/render',{filename:uploaded.filename,start:Number(h.start),duration:Math.max(1,Math.min(Number(duration),Number(h.duration))),captions,caption_style:captionStyle,hook_title:hookTitles?(h.hook||'').slice(0,120):''});
        const result=await waitForJob(renderJob.job_id);
        ready.push({...result,index:i+1,start:h.start,score:h.score,text:h.text});
        setClips([...ready]);setClipProgress({done:ready.length,total:chosen.length});
@@ -103,6 +103,7 @@ function App(){
     <label>Number of clips<select className="choice" value={clipCount} onChange={e=>setClipCount(Number(e.target.value))}><option value="10">10 clips</option><option value="20">20 clips</option><option value="30">30 clips</option><option value="40">40 clips</option></select></label>
    </div>
    <label className="caption-toggle"><input type="checkbox" checked={captions} onChange={e=>setCaptions(e.target.checked)}/><Captions size={17}/> Burn subtitles into video</label>
+   <label className="caption-toggle"><input type="checkbox" checked={hookTitles} onChange={e=>setHookTitles(e.target.checked)}/><Sparkles size={17}/> Add AI hook title for first 3.5 seconds</label>
    <div className="format"><span>OUTPUT</span><strong>9:16 <small>VERTICAL SHORT VIDEO</small></strong></div>
    <button className="primary render" disabled={!uploaded||busy} onClick={generateAll}>{busy?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>} {busy?'Working…':'Find highlight moments'}</button>
    {analysis&&selectedMoments.length>0&&<div className="analysis"><div className="panel-head"><div><div className="step">03 / REVIEW HIGHLIGHTS</div><h2>Choose your moments</h2></div><span className="tag">{selectedMoments.filter(m=>m.selected).length} SELECTED</span></div><p className="hint">Gemini evaluates the actual video and transcript. Scores are editorial estimates, not guaranteed viral predictions. Untick anything you do not want.</p>{selectedMoments.map(m=><div className="highlight" key={m.id}><input type="checkbox" checked={!!m.selected} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,selected:e.target.checked}:x))}/><span className="score">{Math.round(m.score)}</span><span className="moment"><b>{Math.floor(m.start/60)}:{String(Math.floor(m.start%60)).padStart(2,'0')} · {Math.round(m.duration)} sec</b><strong>{m.hook||'AI selected moment'}</strong><small>{m.reason||m.text}</small><small>{m.visual_notes}</small><span className="trim-fields"><label>Start (sec)<input type="number" min="0" step="0.5" value={m.start} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,start:Math.max(0,Number(e.target.value)||0)}:x))}/></label><label>Length (sec)<input type="number" min="1" max={duration} step="1" value={m.duration} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,duration:Math.max(1,Math.min(Number(duration),Number(e.target.value)||1))}:x))}/></label></span></span></div>)}<label className="style-select">Caption style<select className="choice" value={captionStyle} onChange={e=>setCaptionStyle(e.target.value)}><option value="classic">Classic white</option><option value="bold">Bold highlight</option><option value="minimal">Minimal clean</option></select></label><button className="primary render" disabled={busy||!selectedMoments.some(m=>m.selected)} onClick={renderSelected}><Scissors size={17}/> Create selected clips</button></div>}
