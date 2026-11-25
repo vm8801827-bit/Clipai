@@ -19,10 +19,10 @@ function App(){
    const r=await fetch(api+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
    return readResponse(r);
  }
- async function waitForJob(jobId){
+ async function waitForJob(jobId,onUpdate){
    const deadline=Date.now()+45*60*1000;
    while(Date.now()<deadline){
-     await new Promise(resolve=>setTimeout(resolve,2500));
+     await new Promise(resolve=>setTimeout(resolve,1000));
      const r=await fetch(api+'/api/jobs/'+jobId);
      const d=await readResponse(r);
      if(d.status==='completed')return d.result;
@@ -49,7 +49,7 @@ function App(){
  }
  async function importUrl(){
    if(!sourceUrl.trim())return;setBusy(true);setStage('Importing video from link…');resetOutput();
-   try{const d=await request('/api/import-url',{url:sourceUrl.trim()});setUploaded(d);setFile(null);setUploadProgress(100);}
+   try{const job=await request('/api/import-url',{url:sourceUrl.trim()});const d=await waitForJob(job.job_id,status=>setStage(status.status==='queued'?'Waiting to import link…':'Downloading video from link…'));setUploaded(d);setFile(null);setUploadProgress(100);}
    catch(e){setError(e.message);}finally{setBusy(false);setStage('');}
  }
  async function generateAll(){
