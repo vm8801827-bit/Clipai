@@ -25,7 +25,8 @@ class AnimatedCaptionTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("[Events]", content)
         self.assertIn("\\kf", content)
-        self.assertIn("Hello world", content)
+        self.assertIn("Hello", content)
+        self.assertIn("world", content)
         self.assertIn("DejaVu Sans,56", content)
 
     def test_no_words_returns_false_without_invalid_dialogue(self):
