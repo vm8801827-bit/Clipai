@@ -25,6 +25,7 @@ function App(){
      await new Promise(resolve=>setTimeout(resolve,1000));
      const r=await fetch(api+'/api/jobs/'+jobId);
      const d=await readResponse(r);
+     if(onUpdate)onUpdate(d);
      if(d.status==='completed')return d.result;
      if(d.status==='failed')throw new Error(d.error||'Video processing failed.');
    }
