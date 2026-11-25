@@ -33,11 +33,29 @@ def analyze_video_with_gemini(source, transcript, clip_length, limit):
                 '{"clips":[{"start":12.3,"end":42.1,"hook":"short title","reason":"why engaging","quality_score":85,"visual_notes":"visible action"}]}. '
                 "Score editorial quality, not guaranteed virality. Transcript: %s"
             ) % (limit, clip_length, transcript_text[:24000])
-            response = client.models.generate_content(
-                model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-                contents=[video, prompt],
-                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=5000)
+            model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+            generation_config = types.GenerateContentConfig(
+                response_mime_type="application/json", temperature=0.2, max_output_tokens=5000
             )
+            response = None
+            last_error = None
+            for attempt in range(4):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[video, prompt],
+                        config=generation_config
+                    )
+                    break
+                except Exception as retry_error:
+                    last_error = retry_error
+                    error_text = str(retry_error).upper()
+                    is_temporary = any(code in error_text for code in ("503", "UNAVAILABLE", "502", "500", "504", "RESOURCE_EXHAUSTED", "429"))
+                    if not is_temporary or attempt == 3:
+                        raise
+                    time.sleep(2 ** (attempt + 1))
+            if response is None:
+                raise last_error or RuntimeError("Gemini did not return a response.")
             data = json.loads(response.text or "{}")
             duration = float(transcript["duration"])
             clips = []
