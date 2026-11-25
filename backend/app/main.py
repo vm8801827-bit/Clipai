@@ -7,6 +7,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from app.gemini_ai import analyze_video_with_gemini
 
 ROOT = Path(__file__).resolve().parent.parent
 STORAGE = Path(os.getenv("CLIPAI_STORAGE", ROOT / "storage"))
@@ -290,8 +291,9 @@ def _run_analysis(job_id, filename, payload):
             clip_length = 30
         if clip_count not in (10, 20, 30, 40):
             clip_count = 10
-        highlights = find_highlights(transcript["segments"], transcript["duration"], clip_length, clip_count)
-        JOBS[job_id].update(status="completed", result={**transcript, "highlights": highlights})
+        source = safe_upload(filename)
+        highlights = analyze_video_with_gemini(source, transcript, clip_length, clip_count)
+        JOBS[job_id].update(status="completed", result={**transcript, "highlights": highlights, "analysis_engine": "Gemini video understanding"})
     except HTTPException as exc:
         JOBS[job_id].update(status="failed", error=str(exc.detail))
     except Exception as exc:
