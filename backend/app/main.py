@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+import zipfile
 from pydantic import BaseModel, Field
 from app.gemini_ai import analyze_video_with_gemini
 from app.captions import make_ass
@@ -359,8 +362,14 @@ def make_srt(segments, clip_start, clip_end, path):
 
 def _render_clip(req: RenderRequest):
     source = safe_upload(req.filename)
-    if req.aspect != "9:16":
-        raise HTTPException(400, "Only 9:16 output is currently supported.")
+    formats = {
+        "9:16": (720, 1280),
+        "1:1": (1080, 1080),
+        "16:9": (1280, 720),
+    }
+    if req.aspect not in formats:
+        raise HTTPException(400, "Choose 9:16, 1:1, or 16:9 output.")
+    target_width, target_height = formats[req.aspect]
     if shutil.which("ffmpeg") is None:
         raise HTTPException(503, "FFmpeg is not installed on the server.")
     transcript = TRANSCRIPTS.get(req.filename)
@@ -373,7 +382,7 @@ def _render_clip(req: RenderRequest):
         use_captions = make_ass(transcript["segments"], req.start, req.start + req.duration, subtitle, req.caption_style)
     output_name = f"clip-{uuid.uuid4().hex}.mp4"
     output = OUTPUTS / output_name
-    vf = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
+    vf = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
     if req.hook_title.strip():
         title_file.write_text(req.hook_title.strip()[:120], encoding="utf-8")
         escaped_title = str(title_file).replace("\\\\", "\\\\\\\\").replace(":", "\\\\:").replace("'", "\\\\'")
@@ -423,6 +432,31 @@ def render_clip(req: RenderRequest):
     JOBS[job_id] = {"status": "queued", "type": "render"}
     JOB_POOL.submit(_run_render, job_id, req.dict())
     return {"job_id": job_id}
+
+@app.post("/api/download-all")
+def download_all(payload: dict):
+    names = payload.get("filenames", [])
+    if not isinstance(names, list) or not names or len(names) > 40:
+        raise HTTPException(400, "Select between 1 and 40 rendered clips.")
+    paths = []
+    for name in names:
+        safe_name = Path(str(name)).name
+        if safe_name != str(name) or not safe_name.startswith("clip-") or not safe_name.endswith(".mp4"):
+            raise HTTPException(400, "Invalid clip filename.")
+        path = OUTPUTS / safe_name
+        if not path.is_file():
+            raise HTTPException(404, "One or more clips have expired. Render them again.")
+        paths.append(path)
+    archive = OUTPUTS / f"clipai-bundle-{uuid.uuid4().hex}.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for index, path in enumerate(paths, 1):
+            bundle.write(path, arcname=f"clip-{index:02}.mp4")
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename="clipai-clips.zip",
+        background=BackgroundTask(lambda: archive.unlink(missing_ok=True))
+    )
 
 # Serve the built React app from the same origin as the API.
 WEB = ROOT.parent / "frontend" / "dist"
