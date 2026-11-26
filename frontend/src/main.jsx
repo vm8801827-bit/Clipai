@@ -34,19 +34,36 @@ function App(){
  }
  function resetOutput(){setClips([]);setAnalysis(null);setSelectedMoments([]);setError('');setClipProgress({done:0,total:0});}
  async function upload(){
-   if(!file)return;setBusy(true);setStage('Uploading video…');setUploadProgress(0);resetOutput();
+   if(!file)return;setBusy(true);setStage('Preparing secure chunked upload…');setUploadProgress(0);resetOutput();
    try{
-     const fd=new FormData();fd.append('file',file);
-     const d=await new Promise((resolve,reject)=>{
-       const xhr=new XMLHttpRequest();xhr.open('POST',api+'/api/upload');xhr.timeout=30*60*1000;
-       xhr.upload.onprogress=e=>{if(e.lengthComputable)setUploadProgress(Math.round(e.loaded/e.total*100));};
-       xhr.onload=()=>{let body={};try{body=xhr.responseText?JSON.parse(xhr.responseText):{};}catch{reject(new Error('Server ne invalid response diya. Upload retry karein.'));return;}
-         if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.detail||'Upload failed (HTTP '+xhr.status+').'));};
-       xhr.onerror=()=>reject(new Error('Network connection lost. Stable Wi-Fi ya smaller video try karein.'));
-       xhr.ontimeout=()=>reject(new Error('Upload timeout. Free server ki upload limit ho sakti hai.'));
-       xhr.send(fd);
-     });
-     setUploadProgress(100);setUploaded(d);
+     const init=await request('/api/upload/init',{filename:file.name,size:file.size});
+     const chunkSize=Number(init.chunk_size)||6*1024*1024;
+     const total=Math.ceil(file.size/chunkSize);
+     for(let index=0;index<total;index++){
+       const chunk=file.slice(index*chunkSize,Math.min(file.size,(index+1)*chunkSize));
+       const fd=new FormData();fd.append('file',chunk,'chunk.part');
+       let uploaded=false,lastError=null;
+       for(let attempt=1;attempt<=3&&!uploaded;attempt++){
+         try{
+           await new Promise((resolve,reject)=>{
+             const xhr=new XMLHttpRequest();xhr.open('POST',api+'/api/upload/chunk/'+init.upload_id+'/'+index);xhr.timeout=5*60*1000;
+             xhr.upload.onprogress=e=>{if(e.lengthComputable){const done=index*chunkSize+e.loaded;setUploadProgress(Math.min(99,Math.round(done/file.size*100)));}};
+             xhr.onload=()=>{let body={};try{body=xhr.responseText?JSON.parse(xhr.responseText):{};}catch{reject(new Error('Server ne upload chunk ka invalid response diya.'));return;}
+               if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.detail||'Upload chunk failed (HTTP '+xhr.status+').'));};
+             xhr.onerror=()=>reject(new Error('Network connection lost. Internet check karke retry karein.'));
+             xhr.ontimeout=()=>reject(new Error('Chunk upload timeout. Internet slow hai; dobara try karein.'));
+             xhr.send(fd);
+           });
+           uploaded=true;
+         }catch(err){lastError=err;if(attempt<3)await new Promise(resolve=>setTimeout(resolve,1000*attempt));}
+       }
+       if(!uploaded)throw lastError||new Error('Upload chunk failed.');
+       setUploadProgress(Math.min(99,Math.round(((index+1)*chunkSize)/file.size*100)));
+       setStage('Uploading video… part '+(index+1)+' of '+total);
+     }
+     setStage('Finalizing uploaded video…');
+     const ready=await request('/api/upload/complete/'+init.upload_id,{});
+     setUploadProgress(100);setUploaded(ready);
    }catch(e){setError(e.message);}finally{setBusy(false);setStage('');}
  }
  async function importUrl(){
