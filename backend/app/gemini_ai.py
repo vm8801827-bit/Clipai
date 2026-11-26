@@ -26,8 +26,8 @@ def analyze_video_with_gemini(source, transcript, clip_length, limit):
                 "Act as an expert short-form video editor. Analyze the actual video visuals and audio "
                 "together with this timestamped transcript. Find up to %s distinct self-contained "
                 "moments, each exactly %s seconds when the source video is long enough (if the source is shorter, use its full duration). Do not choose by keywords alone. Prefer "
-                "strong hooks, funny or emotional reactions, useful insights, surprising reveals, "
-                "demonstrations, story turns and satisfying payoffs. Reject greetings, introductions, "
+                "visually clear actions or reactions, expressive faces and gestures, useful insights, surprising reveals, "
+                "demonstrations, story turns and satisfying payoffs. Describe only visible evidence in visual_notes; never invent visual events. Reject static filler, greetings, introductions, "
                 "repetition, dead air and contextless fragments. Use original-video timestamps in seconds. "
                 "Start and end on natural boundaries. Return only JSON: "
                 '{"clips":[{"start":12.3,"end":42.1,"hook":"short title","reason":"why engaging","quality_score":85,"visual_notes":"visible action"}]}. '
