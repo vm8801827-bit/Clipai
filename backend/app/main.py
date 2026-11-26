@@ -25,7 +25,7 @@ JOBS = {}
 JOB_POOL = ThreadPoolExecutor(max_workers=1)
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=2)
 
-app = FastAPI(title="Clipai API", version="0.2.0")
+app = FastAPI(title="ClipGenius AI Pro API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/media", StaticFiles(directory=str(OUTPUTS)), name="media")
 
@@ -223,8 +223,8 @@ def health():
     import importlib.util
     return {
         "ok": True,
-        "service": "clipai-api",
-        "version": "0.2.0",
+        "service": "clipgenius-ai-pro-api",
+        "version": "1.0.0",
         "checks": {
             "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
             "ffmpeg_available": bool(shutil.which("ffmpeg")),
