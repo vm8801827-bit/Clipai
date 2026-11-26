@@ -34,19 +34,36 @@ function App(){
  }
  function resetOutput(){setClips([]);setAnalysis(null);setSelectedMoments([]);setError('');setClipProgress({done:0,total:0});}
  async function upload(){
-   if(!file)return;setBusy(true);setStage('Uploading video…');setUploadProgress(0);resetOutput();
+   if(!file)return;setBusy(true);setStage('Preparing secure chunked upload…');setUploadProgress(0);resetOutput();
    try{
-     const fd=new FormData();fd.append('file',file);
-     const d=await new Promise((resolve,reject)=>{
-       const xhr=new XMLHttpRequest();xhr.open('POST',api+'/api/upload');xhr.timeout=30*60*1000;
-       xhr.upload.onprogress=e=>{if(e.lengthComputable)setUploadProgress(Math.round(e.loaded/e.total*100));};
-       xhr.onload=()=>{let body={};try{body=xhr.responseText?JSON.parse(xhr.responseText):{};}catch{reject(new Error('Server ne invalid response diya. Upload retry karein.'));return;}
-         if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.detail||'Upload failed (HTTP '+xhr.status+').'));};
-       xhr.onerror=()=>reject(new Error('Network connection lost. Stable Wi-Fi ya smaller video try karein.'));
-       xhr.ontimeout=()=>reject(new Error('Upload timeout. Free server ki upload limit ho sakti hai.'));
-       xhr.send(fd);
-     });
-     setUploadProgress(100);setUploaded(d);
+     const init=await request('/api/upload/init',{filename:file.name,size:file.size});
+     const chunkSize=Number(init.chunk_size)||6*1024*1024;
+     const total=Math.ceil(file.size/chunkSize);
+     for(let index=0;index<total;index++){
+       const chunk=file.slice(index*chunkSize,Math.min(file.size,(index+1)*chunkSize));
+       const fd=new FormData();fd.append('file',chunk,'chunk.part');
+       let uploaded=false,lastError=null;
+       for(let attempt=1;attempt<=3&&!uploaded;attempt++){
+         try{
+           await new Promise((resolve,reject)=>{
+             const xhr=new XMLHttpRequest();xhr.open('POST',api+'/api/upload/chunk/'+init.upload_id+'/'+index);xhr.timeout=5*60*1000;
+             xhr.upload.onprogress=e=>{if(e.lengthComputable){const done=index*chunkSize+e.loaded;setUploadProgress(Math.min(99,Math.round(done/file.size*100)));}};
+             xhr.onload=()=>{let body={};try{body=xhr.responseText?JSON.parse(xhr.responseText):{};}catch{reject(new Error('Server ne upload chunk ka invalid response diya.'));return;}
+               if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.detail||'Upload chunk failed (HTTP '+xhr.status+').'));};
+             xhr.onerror=()=>reject(new Error('Network connection lost. Internet check karke retry karein.'));
+             xhr.ontimeout=()=>reject(new Error('Chunk upload timeout. Internet slow hai; dobara try karein.'));
+             xhr.send(fd);
+           });
+           uploaded=true;
+         }catch(err){lastError=err;if(attempt<3)await new Promise(resolve=>setTimeout(resolve,1000*attempt));}
+       }
+       if(!uploaded)throw lastError||new Error('Upload chunk failed.');
+       setUploadProgress(Math.min(99,Math.round(((index+1)*chunkSize)/file.size*100)));
+       setStage('Uploading video… part '+(index+1)+' of '+total);
+     }
+     setStage('Finalizing uploaded video…');
+     const ready=await request('/api/upload/complete/'+init.upload_id,{});
+     setUploadProgress(100);setUploaded(ready);
    }catch(e){setError(e.message);}finally{setBusy(false);setStage('');}
  }
  async function importUrl(){
@@ -75,7 +92,7 @@ function App(){
      const r=await fetch(api+'/api/download-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filenames:clips.map(c=>c.filename)})});
      if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(d.detail||'Could not prepare ZIP download.');}
      const blob=await r.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');
-     a.href=url;a.download='clipai-clips.zip';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+     a.href=url;a.download='clipgenius-ai-pro-clips.zip';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
    }catch(e){setError(e.message);}
  }
  async function renderSelected(){
@@ -97,7 +114,7 @@ function App(){
    finally{setBusy(false);}
  }
  return <main>
-  <nav><div className="brand"><span className="logo"><Scissors size={19}/></span>clipai</div><span className="tag">AI VIDEO WORKSPACE</span></nav>
+  <nav><div className="brand"><span className="logo"><Scissors size={19}/></span>ClipGenius AI Pro</div><span className="tag">AI VIDEO WORKSPACE</span></nav>
   <section className="hero"><div className="eyebrow"><Sparkles size={14}/> YOUR SHORT-FORM STUDIO</div><h1>Long videos.<br/><span>Ready-to-post clips.</span></h1><p>Upload once. AI finds moments, creates vertical clips and lets you download every result.</p></section>
   <section className="workspace">
    <div className="panel-head"><div><div className="step">01 / VIDEO</div><h2>Upload your long video</h2></div><Film size={22}/></div>
@@ -121,9 +138,9 @@ function App(){
    {analysis&&selectedMoments.length>0&&<div className="analysis"><div className="panel-head"><div><div className="step">03 / REVIEW HIGHLIGHTS</div><h2>Choose your moments</h2></div><span className="tag">{selectedMoments.filter(m=>m.selected).length} SELECTED</span></div><p className="hint">Gemini evaluates the actual video and transcript. Scores are editorial estimates, not guaranteed viral predictions. Untick anything you do not want.</p><div className="engine-note"><b>Analysis engine:</b> {analysis.analysis_engine||"AI video analysis"}{analysis.analysis_engine&&analysis.analysis_engine.toLowerCase().includes("fallback")&&<span> · Transcript-only fallback was used; visual understanding was unavailable for this run.</span>}</div>{selectedMoments.map(m=><div className="highlight" key={m.id}><input type="checkbox" checked={!!m.selected} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,selected:e.target.checked}:x))}/><span className="score">{Math.round(m.score)}</span><span className="moment"><b>{Math.floor(m.start/60)}:{String(Math.floor(m.start%60)).padStart(2,'0')} · {Math.round(m.duration)} sec</b><strong>{m.hook||'AI selected moment'}</strong><small>{m.reason||m.text}</small><small>{m.visual_notes}</small><span className="trim-fields"><label>Start (sec)<input type="number" min="0" step="0.5" value={m.start} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,start:Math.max(0,Number(e.target.value)||0)}:x))}/></label><label>Length (sec)<input type="number" min="1" max={duration} step="1" value={m.duration} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,duration:Math.max(1,Math.min(Number(duration),Number(e.target.value)||1))}:x))}/></label></span></span></div>)}<label className="style-select">Caption style<select className="choice" value={captionStyle} onChange={e=>setCaptionStyle(e.target.value)}><option value="classic">Classic white</option><option value="bold">Bold highlight</option><option value="minimal">Minimal clean</option></select></label><button className="primary render" disabled={busy||!selectedMoments.some(m=>m.selected)} onClick={renderSelected}><Scissors size={17}/> Create selected clips</button></div>}
    {busy&&!stage.includes('Uploading')&&<div className="progress">{stage}{clipProgress.total>0&&<><b>{clipProgress.done} / {clipProgress.total} clips ready</b><div className="upload-track"><span style={{width:(clipProgress.done/clipProgress.total*100)+'%'}}/></div></>}</div>}
    {error&&<div className="error">{error}</div>}
-   {clips.length>0&&<div className="results"><div className="success"><CheckCircle2 size={17}/> {clips.length} clip(s) ready to download</div><button className="secondary" onClick={downloadAll}><Download size={17}/> Download all clips (ZIP)</button><div className="clip-grid">{clips.map(c=><article className="clip-card" key={c.filename}><div className="clip-title">CLIP {c.index} · {Math.round(c.score||0)} SCORE</div><video controls playsInline preload="metadata" src={api+c.url}/><p>{c.text||'AI selected moment'}</p><a className="download" href={api+c.url} download={'clipai-clip-'+c.index+'.mp4'} type="video/mp4"><Download size={17}/> Download to device</a></article>)}</div><p className="gallery-note">On Android, tap Download to device. The MP4 is saved in Downloads; your Gallery app may show it automatically or after scanning the file.</p></div>}
+   {clips.length>0&&<div className="results"><div className="success"><CheckCircle2 size={17}/> {clips.length} clip(s) ready to download</div><button className="secondary" onClick={downloadAll}><Download size={17}/> Download all clips (ZIP)</button><div className="clip-grid">{clips.map(c=><article className="clip-card" key={c.filename}><div className="clip-title">CLIP {c.index} · {Math.round(c.score||0)} SCORE</div><video controls playsInline preload="metadata" src={api+c.url}/><p>{c.text||'AI selected moment'}</p><a className="download" href={api+c.url} download={'clipgenius-clip-'+c.index+'.mp4'} type="video/mp4"><Download size={17}/> Download to device</a></article>)}</div><p className="gallery-note">On Android, tap Download to device. The MP4 is saved in Downloads; your Gallery app may show it automatically or after scanning the file.</p></div>}
   </section>
-  <footer>CLIPAI <span>·</span> MADE FOR THE NEXT SCROLL</footer>
+  <footer>CLIPGENIUS AI PRO <span>·</span> MADE FOR THE NEXT SCROLL</footer>
  </main>;
 }
 createRoot(document.getElementById('root')).render(<App/>);
