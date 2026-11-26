@@ -303,10 +303,38 @@ async def upload_video(file: UploadFile = File(...)):
         raise
     return {"filename": name, "original_name": file.filename, "size": size}
 
+def _probe_video_duration(source):
+    """Read video duration without requiring a speech track."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(source)],
+        capture_output=True, text=True, timeout=30
+    )
+    if probe.returncode:
+        raise HTTPException(422, "Could not read this video. Try a valid MP4, MOV, or WEBM file.")
+    try:
+        duration = float(probe.stdout.strip())
+    except (TypeError, ValueError):
+        duration = 0
+    if duration <= 0:
+        raise HTTPException(422, "This video has no readable duration.")
+    return duration
+
 def _run_analysis(job_id, filename, payload):
     JOBS[job_id]["status"] = "running"
     try:
-        transcript = transcribe(filename)
+        try:
+            transcript = transcribe(filename)
+        except HTTPException as speech_error:
+            if "No clear speech was detected" not in str(speech_error.detail):
+                raise
+            # Gemini can still find visual moments in music, sports, gameplay,
+            # demonstrations, and other videos without spoken dialogue.
+            transcript = {
+                "language": "und",
+                "duration": round(_probe_video_duration(safe_upload(filename)), 2),
+                "segments": []
+            }
         clip_length = int(payload.get("clip_length", 30))
         clip_count = int(payload.get("clip_count", 10))
         if clip_length not in (30, 60):
@@ -321,6 +349,8 @@ def _run_analysis(job_id, filename, payload):
             # Keep clip generation usable when Gemini is temporarily overloaded or unavailable.
             highlights = find_highlights(transcript["segments"], transcript["duration"], clip_length, clip_count)
             if not highlights:
+                raise gemini_error
+            if not transcript["segments"]:
                 raise gemini_error
             engine = "Transcript fallback (Gemini temporarily unavailable)"
         JOBS[job_id].update(status="completed", result={**transcript, "highlights": highlights, "analysis_engine": engine})
@@ -377,9 +407,15 @@ def _render_clip(req: RenderRequest):
     title_file = OUTPUTS / f"{uuid.uuid4().hex}.txt"
     use_captions = False
     if req.captions:
-        if not transcript:
-            transcript = transcribe(req.filename)
-        use_captions = make_ass(transcript["segments"], req.start, req.start + req.duration, subtitle, req.caption_style)
+        try:
+            if not transcript:
+                transcript = transcribe(req.filename)
+            use_captions = make_ass(transcript["segments"], req.start, req.start + req.duration, subtitle, req.caption_style)
+        except HTTPException as speech_error:
+            if "No clear speech was detected" not in str(speech_error.detail):
+                raise
+            # Keep visual-only clips renderable; there is simply no dialogue to caption.
+            use_captions = False
     output_name = f"clip-{uuid.uuid4().hex}.mp4"
     output = OUTPUTS / output_name
     vf = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
