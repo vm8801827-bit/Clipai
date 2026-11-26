@@ -67,6 +67,16 @@ function App(){
    }catch(e){setError(e.message);}
    finally{setBusy(false);}
  }
+ async function downloadAll(){
+   if(!clips.length)return;
+   try{
+     setError('');
+     const r=await fetch(api+'/api/download-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filenames:clips.map(c=>c.filename)})});
+     if(!r.ok){let d={};try{d=await r.json();}catch{}throw new Error(d.detail||'Could not prepare ZIP download.');}
+     const blob=await r.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');
+     a.href=url;a.download='clipai-clips.zip';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+   }catch(e){setError(e.message);}
+ }
  async function renderSelected(){
    const chosen=selectedMoments.filter(m=>m.selected);
    if(!uploaded||!chosen.length)return;
@@ -76,7 +86,7 @@ function App(){
      for(let i=0;i<chosen.length;i++){
        setStage('Creating clip '+(i+1)+' of '+chosen.length+'…');
        const h=chosen[i];
-       const renderJob=await request('/api/render',{filename:uploaded.filename,start:Number(h.start),duration:Math.max(1,Math.min(Number(duration),Number(h.duration))),captions,caption_style:captionStyle,hook_title:hookTitles?(h.hook||'').slice(0,120):''});
+       const renderJob=await request('/api/render',{filename:uploaded.filename,start:Number(h.start),duration:Math.max(1,Math.min(Number(duration),Number(h.duration))),captions,caption_style:captionStyle,aspect,hook_title:hookTitles?(h.hook||'').slice(0,120):''});
        const result=await waitForJob(renderJob.job_id);
        ready.push({...result,index:i+1,start:h.start,score:h.score,text:h.text});
        setClips([...ready]);setClipProgress({done:ready.length,total:chosen.length});
@@ -104,12 +114,13 @@ function App(){
    </div>
    <label className="caption-toggle"><input type="checkbox" checked={captions} onChange={e=>setCaptions(e.target.checked)}/><Captions size={17}/> Burn subtitles into video</label>
    <label className="caption-toggle"><input type="checkbox" checked={hookTitles} onChange={e=>setHookTitles(e.target.checked)}/><Sparkles size={17}/> Add AI hook title for first 3.5 seconds</label>
-   <div className="format"><span>OUTPUT</span><strong>9:16 <small>VERTICAL SHORT VIDEO</small></strong></div>
+   <label className="style-select">Output format<select className="choice" value={aspect} onChange={e=>setAspect(e.target.value)}><option value="9:16">9:16 · Vertical Shorts / Reels</option><option value="1:1">1:1 · Square post</option><option value="16:9">16:9 · Landscape video</option></select></label>
+   <div className="format"><span>OUTPUT</span><strong>{aspect} <small>{aspect==='9:16'?'VERTICAL SHORT VIDEO':aspect==='1:1'?'SQUARE VIDEO':'LANDSCAPE VIDEO'}</small></strong></div>
    <button className="primary render" disabled={!uploaded||busy} onClick={generateAll}>{busy?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>} {busy?'Working…':'Find highlight moments'}</button>
    {analysis&&selectedMoments.length>0&&<div className="analysis"><div className="panel-head"><div><div className="step">03 / REVIEW HIGHLIGHTS</div><h2>Choose your moments</h2></div><span className="tag">{selectedMoments.filter(m=>m.selected).length} SELECTED</span></div><p className="hint">Gemini evaluates the actual video and transcript. Scores are editorial estimates, not guaranteed viral predictions. Untick anything you do not want.</p><div className="engine-note"><b>Analysis engine:</b> {analysis.analysis_engine||"AI video analysis"}{analysis.analysis_engine&&analysis.analysis_engine.toLowerCase().includes("fallback")&&<span> · Transcript-only fallback was used; visual understanding was unavailable for this run.</span>}</div>{selectedMoments.map(m=><div className="highlight" key={m.id}><input type="checkbox" checked={!!m.selected} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,selected:e.target.checked}:x))}/><span className="score">{Math.round(m.score)}</span><span className="moment"><b>{Math.floor(m.start/60)}:{String(Math.floor(m.start%60)).padStart(2,'0')} · {Math.round(m.duration)} sec</b><strong>{m.hook||'AI selected moment'}</strong><small>{m.reason||m.text}</small><small>{m.visual_notes}</small><span className="trim-fields"><label>Start (sec)<input type="number" min="0" step="0.5" value={m.start} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,start:Math.max(0,Number(e.target.value)||0)}:x))}/></label><label>Length (sec)<input type="number" min="1" max={duration} step="1" value={m.duration} disabled={busy} onChange={e=>setSelectedMoments(old=>old.map(x=>x.id===m.id?{...x,duration:Math.max(1,Math.min(Number(duration),Number(e.target.value)||1))}:x))}/></label></span></span></div>)}<label className="style-select">Caption style<select className="choice" value={captionStyle} onChange={e=>setCaptionStyle(e.target.value)}><option value="classic">Classic white</option><option value="bold">Bold highlight</option><option value="minimal">Minimal clean</option></select></label><button className="primary render" disabled={busy||!selectedMoments.some(m=>m.selected)} onClick={renderSelected}><Scissors size={17}/> Create selected clips</button></div>}
    {busy&&!stage.includes('Uploading')&&<div className="progress">{stage}{clipProgress.total>0&&<><b>{clipProgress.done} / {clipProgress.total} clips ready</b><div className="upload-track"><span style={{width:(clipProgress.done/clipProgress.total*100)+'%'}}/></div></>}</div>}
    {error&&<div className="error">{error}</div>}
-   {clips.length>0&&<div className="results"><div className="success"><CheckCircle2 size={17}/> {clips.length} clip(s) ready to download</div><div className="clip-grid">{clips.map(c=><article className="clip-card" key={c.filename}><div className="clip-title">CLIP {c.index} · {Math.round(c.score||0)} SCORE</div><video controls playsInline preload="metadata" src={api+c.url}/><p>{c.text||'AI selected moment'}</p><a className="download" href={api+c.url} download={'clipai-clip-'+c.index+'.mp4'} type="video/mp4"><Download size={17}/> Download to device</a></article>)}</div><p className="gallery-note">On Android, tap Download to device. The MP4 is saved in Downloads; your Gallery app may show it automatically or after scanning the file.</p></div>}
+   {clips.length>0&&<div className="results"><div className="success"><CheckCircle2 size={17}/> {clips.length} clip(s) ready to download</div><button className="secondary" onClick={downloadAll}><Download size={17}/> Download all clips (ZIP)</button><div className="clip-grid">{clips.map(c=><article className="clip-card" key={c.filename}><div className="clip-title">CLIP {c.index} · {Math.round(c.score||0)} SCORE</div><video controls playsInline preload="metadata" src={api+c.url}/><p>{c.text||'AI selected moment'}</p><a className="download" href={api+c.url} download={'clipai-clip-'+c.index+'.mp4'} type="video/mp4"><Download size={17}/> Download to device</a></article>)}</div><p className="gallery-note">On Android, tap Download to device. The MP4 is saved in Downloads; your Gallery app may show it automatically or after scanning the file.</p></div>}
   </section>
   <footer>CLIPAI <span>·</span> MADE FOR THE NEXT SCROLL</footer>
  </main>;
