@@ -22,6 +22,7 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "0"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024 if MAX_UPLOAD_MB > 0 else 0
 TRANSCRIPTS = {}
 JOBS = {}
+UPLOAD_SESSIONS = {}
 JOB_POOL = ThreadPoolExecutor(max_workers=1)
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=2)
 
@@ -278,6 +279,84 @@ def import_video_url(payload: dict):
     JOBS[job_id] = {"status": "queued", "type": "import"}
     DOWNLOAD_POOL.submit(_run_import, job_id, raw_url)
     return {"job_id": job_id}
+
+@app.post("/api/upload/init")
+async def init_chunked_upload(payload: dict):
+    """Start a resumable-by-chunk upload; each request stays below common proxy body limits."""
+    original_name = Path(str(payload.get("filename", "video.mp4"))).name
+    ext = Path(original_name).suffix.lower()
+    if ext not in {".mp4", ".mov", ".m4v", ".webm"}:
+        raise HTTPException(400, "Upload an MP4, MOV, M4V, or WEBM video.")
+    try:
+        total_size = int(payload.get("size", 0))
+    except (TypeError, ValueError):
+        total_size = 0
+    if total_size <= 0:
+        raise HTTPException(400, "The selected video is empty or its size could not be read.")
+    if MAX_UPLOAD_BYTES and total_size > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"Video exceeds the configured {MAX_UPLOAD_MB} MB application limit.")
+    upload_id = uuid.uuid4().hex
+    session_dir = UPLOADS / ("upload-" + upload_id)
+    session_dir.mkdir(parents=True, exist_ok=False)
+    UPLOAD_SESSIONS[upload_id] = {
+        "name": upload_id + ext, "original_name": original_name,
+        "size": total_size, "received": 0, "next_index": 0,
+        "directory": str(session_dir)
+    }
+    return {"upload_id": upload_id, "chunk_size": 6 * 1024 * 1024}
+
+@app.post("/api/upload/chunk/{upload_id}/{chunk_index}")
+async def upload_chunk(upload_id: str, chunk_index: int, file: UploadFile = File(...)):
+    session = UPLOAD_SESSIONS.get(upload_id)
+    if not session:
+        raise HTTPException(404, "Upload session expired. Start the upload again.")
+    if chunk_index != session["next_index"]:
+        raise HTTPException(409, "Upload chunk is out of order. Please retry the upload.")
+    part = Path(session["directory"]) / f"{chunk_index:06d}.part"
+    written = 0
+    try:
+        with part.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if session["received"] + written > session["size"]:
+                    raise HTTPException(400, "Received more data than the selected file size.")
+                if shutil.disk_usage(STORAGE).free < len(chunk) + 64 * 1024 * 1024:
+                    raise HTTPException(507, "Not enough temporary storage on this server. Try a smaller video.")
+                out.write(chunk)
+        if written == 0:
+            raise HTTPException(400, "An empty upload chunk was received.")
+        session["received"] += written
+        session["next_index"] += 1
+        return {"received": session["received"], "total": session["size"]}
+    except Exception:
+        part.unlink(missing_ok=True)
+        raise
+
+@app.post("/api/upload/complete/{upload_id}")
+async def complete_chunked_upload(upload_id: str):
+    session = UPLOAD_SESSIONS.get(upload_id)
+    if not session:
+        raise HTTPException(404, "Upload session expired. Start the upload again.")
+    if session["received"] != session["size"]:
+        raise HTTPException(400, f"Upload incomplete: received {session['received']} of {session['size']} bytes.")
+    session_dir = Path(session["directory"])
+    destination = UPLOADS / session["name"]
+    try:
+        with destination.open("wb") as output:
+            for index in range(session["next_index"]):
+                part = session_dir / f"{index:06d}.part"
+                if not part.is_file():
+                    raise HTTPException(400, "An upload part is missing. Please upload again.")
+                with part.open("rb") as source:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
+        if destination.stat().st_size != session["size"]:
+            raise HTTPException(400, "The completed video size does not match the original file.")
+        shutil.rmtree(session_dir, ignore_errors=True)
+        UPLOAD_SESSIONS.pop(upload_id, None)
+        return {"filename": destination.name, "original_name": session["original_name"], "size": destination.stat().st_size}
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
