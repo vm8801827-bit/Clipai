@@ -7,6 +7,7 @@ function App(){
  const [file,setFile]=useState(null),[sourceUrl,setSourceUrl]=useState(''),[uploaded,setUploaded]=useState(null);
  const [duration,setDuration]=useState(30),[hookTitles,setHookTitles]=useState(true),[busy,setBusy]=useState(false),[stage,setStage]=useState(''),[error,setError]=useState('');
  const [analysis,setAnalysis]=useState(null),[captions,setCaptions]=useState(true),[uploadProgress,setUploadProgress]=useState(0),[clipCount,setClipCount]=useState(10);
+ const [aspect,setAspect]=useState('9:16');
  const [clips,setClips]=useState([]),[clipProgress,setClipProgress]=useState({done:0,total:0}),[selectedMoments,setSelectedMoments]=useState([]),[captionStyle,setCaptionStyle]=useState('classic');
  const api=import.meta.env.VITE_API_URL||'';
  async function readResponse(r){
